@@ -12,3 +12,5 @@ docker run --rm -p 9090:8080 -e PORT=8080 \
 ```
 
 TODO: Deploy as Cloud Run service and invoke with Cloud Scheduler
+
+Resource: [https://cloud.google.com/run/docs/triggering/using-scheduler](https://cloud.google.com/run/docs/triggering/using-scheduler)
