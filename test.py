@@ -19,6 +19,11 @@ def numberfire_scrape():
 
 
 @cli.command()
+def dfn_scrape():
+    print(main.dfn_scrape(test=True))
+
+
+@cli.command()
 @click.option('--dt', type=str)
 def rotoguru_scrape(dt):
     if dt:

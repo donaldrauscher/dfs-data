@@ -1,8 +1,14 @@
-import datetime, io, json, os, re, pytz, warnings
+import datetime, io, json, os, re, pytz, urllib, warnings
 
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
+
+from selenium import webdriver
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 
 from gcsfs import GCSFileSystem
 from flask import Flask, request
@@ -106,6 +112,60 @@ def numberfire_scrape(dt=None, test=False):
     return out
 
 
+def dfn_scrape(dt=None, test=False):
+    """
+    Download DFN player projections
+    """
+    # create browser
+    options = webdriver.FirefoxOptions()
+    options.headless = True
+
+    profile = webdriver.FirefoxProfile()
+    profile.set_preference("browser.download.folderList", 2)
+    profile.set_preference("browser.download.manager.showWhenStarting", False)
+    profile.set_preference("browser.download.dir", "/tmp")
+    profile.set_preference("browser.helperApps.neverAsk.saveToDisk", "text/csv")
+
+    browser = webdriver.Firefox(firefox_profile=profile, options=options)
+    browser.implicitly_wait(5)
+
+    # log in
+    browser.get('https://dailyfantasynerd.com/login')
+    browser.find_element_by_id('input-username').send_keys(os.environ['DFN_USER'])
+    browser.find_element_by_id('input-password').send_keys(os.environ['DFN_PASS'])
+    browser.find_element_by_xpath("//button[contains(text(),'Sign In')]").click()
+
+    # wait for data to load
+    WebDriverWait(browser, 10).until(EC.presence_of_all_elements_located((By.XPATH, "//a[@class='exportData']")))
+
+    # download data
+    if dt:
+        url = f'https://dailyfantasynerd.com/optimizer/draftkings/nba?d={dt.strftime("%a %b %d %Y")}'
+    else:
+        url = 'https://dailyfantasynerd.com/optimizer/draftkings/nba'
+
+    browser.get(url)
+    WebDriverWait(browser, 30).until(EC.presence_of_all_elements_located((By.XPATH, "//a[@class='exportData']")))
+    browser.find_element_by_xpath("//a[@class='exportData']").click()
+
+    # load to pandas
+    data_element = browser.find_element_by_xpath("//a[@download]")
+    os.remove(os.path.join('/tmp', data_element.get_attribute('download').replace('/', '_')))
+
+    data = data_element.get_attribute('href')
+    data = urllib.parse.unquote(data[data.find('Player%20Name'):])
+
+    df = pd.read_csv(io.StringIO(data))
+    df.columns = [re.sub('\W', '_', c).lower() for c in df.columns]
+    df = df[df.columns[~df.columns.str.contains("^actual_.+", regex=True)]]
+
+    out = f"gs://djr-data/dfs-data/dfn/projections_{'test' if test else dt.strftime('%Y%m%d')}.csv"
+    with fs.open(out, "w") as f:
+        df.to_csv(f, index=False)
+
+    return out
+
+
 def rotoguru_scrape(dt=None, test=False):
     """
     Download actual FP scored from RotoGurus
@@ -121,7 +181,7 @@ def rotoguru_scrape(dt=None, test=False):
 
     # convert to pandas
     df = pd.read_csv(io.StringIO(table), sep=';')
-    df.columns = [re.sub('\W', '_', c) for c in df.columns]
+    df.columns = [re.sub('\W', '_', c).lower() for c in df.columns]
     if len(df) == 0:
         return
 
@@ -139,29 +199,27 @@ def rotoguru_scrape(dt=None, test=False):
     df = (
         df
         .assign(
-            Name=lambda x: x.Name.apply(process_name),
-            Team=lambda x: x.Team.str.upper(),
-            Oppt=lambda x: x.Team.str.upper(),
-            DNP=lambda x: x.Minutes.astype(str).fillna('').str.contains('DNP').astype(int),
-            Minutes=lambda x: x.Minutes.astype(str).replace('DNP', 0).astype(float),
-            Starter=lambda x: x.Starter.fillna(0).astype(int),
-            Points=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)pt'),
-            Rebounds=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)rb'),
-            Assists=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)as'),
-            Steals=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)st'),
-            Treys=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)trey'),
-            Blocks=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)bl'),
-            Turnovers=lambda x: x['Stat_line'].fillna('').apply(get_stat, regex='([0-9]+)to'),
-            Double_Double=lambda x: ((x[['Points', 'Rebounds', 'Assists', 'Blocks', 'Steals']] >= 10).astype(int).sum(axis=1) >= 2).astype(int),
-            Triple_Double=lambda x: ((x[['Points', 'Rebounds', 'Assists', 'Blocks', 'Steals']] >= 10).astype(int).sum(axis=1) >= 3).astype(int),
-            DK_Pts_QC=lambda x: x.Points*1 + x.Treys*0.5 + x.Rebounds*1.25 + x.Assists*1.5 + x.Steals*2 + x.Blocks*2 - x.Turnovers*0.5 + x.Double_Double*1.5 + x.Triple_Double*3
+            name=lambda x: x.name.apply(process_name),
+            team=lambda x: x.team.str.upper(),
+            oppt=lambda x: x.team.str.upper(),
+            dnp=lambda x: x.minutes.astype(str).fillna('').str.contains('DNP').astype(int),
+            minutes=lambda x: x.minutes.astype(str).replace('DNP', 0).astype(float),
+            starter=lambda x: x.starter.fillna(0).astype(int),
+            points=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)pt'),
+            rebounds=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)rb'),
+            assists=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)as'),
+            steals=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)st'),
+            treys=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)trey'),
+            blocks=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)bl'),
+            turnovers=lambda x: x['stat_line'].fillna('').apply(get_stat, regex='([0-9]+)to'),
+            double_double=lambda x: ((x[['points', 'rebounds', 'assists', 'blocks', 'steals']] >= 10).astype(int).sum(axis=1) >= 2).astype(int),
+            triple_double=lambda x: ((x[['points', 'rebounds', 'assists', 'blocks', 'steals']] >= 10).astype(int).sum(axis=1) >= 3).astype(int),
+            dk_pts_qc=lambda x: x.points*1 + x.treys*0.5 + x.rebounds*1.25 + x.assists*1.5 + x.steals*2 + x.blocks*2 - x.turnovers*0.5 + x.double_double*1.5 + x.triple_double*3
         )
     )
 
-    if not df.DK_Salary.isnull().all():
-        df = df.assign(DK_Salary=lambda x: x['DK_Salary'].str.replace(',', '').str.replace('$', '').astype(float))
-
-    df.columns = [c.lower() for c in df.columns]
+    if not df.dk_salary.isnull().all():
+        df = df.assign(dk_salary=lambda x: x['dk_salary'].str.replace(',', '').str.replace('$', '').astype(float))
 
     out = f"gs://djr-data/dfs-data/rotoguru/actuals_{'test' if test else dt.strftime('%Y%m%d')}.csv"
     with fs.open(out, "w") as f:
@@ -176,10 +234,12 @@ def projections():
     dt = get_current_dt()
     rotowire_scrape_out = rotowire_scrape(dt)
     numberfire_scrape_out = numberfire_scrape(dt)
+    dfn_scrape_out = dfn_scrape(dt)
 
     return f"""
     Downloaded RotoWire data to {rotowire_scrape_out}...
     Downloaded NumberFire data to {numberfire_scrape_out}...
+    Downloaded DFN data to {dfn_scrape_out}...
     Done.
     """
 
