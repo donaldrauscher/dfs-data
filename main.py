@@ -136,7 +136,7 @@ def dfn_scrape(dt=None, test=False):
     browser.find_element_by_xpath("//button[contains(text(),'Sign In')]").click()
 
     # wait for data to load
-    WebDriverWait(browser, 10).until(EC.presence_of_all_elements_located((By.XPATH, "//a[@class='exportData']")))
+    WebDriverWait(browser, 60).until(EC.presence_of_all_elements_located((By.XPATH, "//a[@class='exportData']")))
 
     # download data
     if dt:
@@ -145,7 +145,7 @@ def dfn_scrape(dt=None, test=False):
         url = 'https://dailyfantasynerd.com/optimizer/draftkings/nba'
 
     browser.get(url)
-    WebDriverWait(browser, 30).until(EC.presence_of_all_elements_located((By.XPATH, "//a[@class='exportData']")))
+    WebDriverWait(browser, 60).until(EC.presence_of_all_elements_located((By.XPATH, "//a[@class='exportData']")))
     browser.find_element_by_xpath("//a[@class='exportData']").click()
 
     # load to pandas

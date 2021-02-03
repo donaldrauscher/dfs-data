@@ -4,33 +4,41 @@ import main
 
 
 @click.group()
-def cli():
-    pass
+@click.option('--test/--no-test', default=True)
+@click.pass_context
+def cli(ctx, test):
+    ctx.obj['test'] = test
+    ctx.ensure_object(dict)
 
 
 @cli.command()
-def rotowire_scrape():
-    print(main.rotowire_scrape(test=True))
+@click.pass_context
+def rotowire_scrape(ctx):
+    print(main.rotowire_scrape(test=ctx.obj['test']))
 
 
 @cli.command()
-def numberfire_scrape():
-    print(main.numberfire_scrape(test=True))
-
-
-@cli.command()
-def dfn_scrape():
-    print(main.dfn_scrape(test=True))
+@click.pass_context
+def numberfire_scrape(ctx):
+    print(main.numberfire_scrape(test=ctx.obj['test']))
 
 
 @cli.command()
 @click.option('--dt', type=str)
-def rotoguru_scrape(dt):
+@click.pass_context
+def dfn_scrape(ctx, dt):
     if dt:
-        dt = datetime.datetime.strptime("%Y%m%d")
-    else:
-        dt = main.get_current_dt() - datetime.timedelta(days=1)
-    print(main.rotoguru_scrape(dt, test=True))
+        dt = datetime.datetime.strptime(dt, "%Y%m%d")
+    print(main.dfn_scrape(dt=dt, test=ctx.obj['test']))
+
+
+@cli.command()
+@click.option('--dt', type=str)
+@click.pass_context
+def rotoguru_scrape(ctx, dt):
+    if dt:
+        dt = datetime.datetime.strptime(dt, "%Y%m%d")
+    print(main.rotoguru_scrape(dt, test=ctx.obj['test']))
 
 
 if __name__ == "__main__":
